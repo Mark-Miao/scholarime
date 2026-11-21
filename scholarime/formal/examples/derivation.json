@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "variables": {
+    "x": {
+      "real": true
+    }
+  },
+  "expression": "x**3 + sin(x)",
+  "operations": [
+    {
+      "op": "differentiate",
+      "variable": "x"
+    },
+    {
+      "op": "simplify"
+    }
+  ]
+}
