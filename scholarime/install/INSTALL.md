@@ -1,8 +1,9 @@
 # Scholarime Installation
 
-Scholarime requires Python 3.10 or newer. Pillow renders charts, `pywebview` provides the native
-review window, `openpyxl` handles Excel input/output, and the remaining data/search/import logic
-uses the Python standard library.
+Scholarime requires Python 3.10 or newer. Pillow renders the general CSV charts, NumPy and
+Matplotlib render publication templates, PyMuPDF enables optional rendered-PDF collision audits,
+`pywebview` provides the native review window, `openpyxl` handles Excel input/output, and the
+remaining data/search/import/screening logic uses the Python standard library.
 
 ## Create an Isolated Environment
 
@@ -51,8 +52,8 @@ For the complete toolkit, install the package in editable mode with optional dep
 python -m pip install -e ".[all]"
 ```
 
-Individual groups are available when a smaller installation is preferred: `charts`, `ui`, `excel`,
-`symbolic`, `workspace`, `stats`, and `writing`. The legacy
+Individual groups are available when a smaller installation is preferred: `charts`, `figures`,
+`figure-pdf`, `ui`, `excel`, `symbolic`, `workspace`, `stats`, and `writing`. The legacy
 `scholarime/install/dependencies.txt` contains the full set.
 
 `pywebview` uses the operating system webview. Windows normally uses WebView2, macOS uses
@@ -157,6 +158,9 @@ python scholarime/scripts/scholarly_chart.py --help
 python scholarime/scripts/scholarly_data.py --help
 python scholarime/scripts/symbolic_derive.py --help
 python scholarime/scripts/academic_search.py --help
+python scholarime/scripts/scholarly_verify.py --help
+python scholarime/scripts/scholarly_figure.py --help
+python scholarime/scripts/scholarly_screening.py --help
 python -m scholarime --help
 python -m scholarime workspace --help
 python -m scholarime stats --help
@@ -199,3 +203,12 @@ redistributing the skill.
 For literature searches, `SCHOLARIME_CONTACT_EMAIL` improves OpenAlex/Crossref request
 identification, and `NCBI_API_KEY` raises PubMed E-utilities limits. Do not put either value in a
 committed configuration file.
+
+Citation verification uses the bundled CiteVerify lookup engine and needs no additional Python
+package. OpenAlex and Semantic Scholar cross-checks are optional and use `OPENALEX_KEY` and
+`S2_API_KEY`; Scholarime's saved Semantic Scholar configuration is also accepted. Keep keys in
+protected local files or environment variables and never pass them as shell arguments.
+
+Complex figure templates require NumPy and Matplotlib from the `figures` group. Rendered-PDF
+collision auditing additionally requires PyMuPDF from the optional `figure-pdf` group. The other
+figure audits and systematic-review screening use lightweight or standard-library code.

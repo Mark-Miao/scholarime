@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.metadata
 import importlib.util
 import sys
 from pathlib import Path
@@ -18,9 +19,23 @@ COMMANDS = {
     "stats": "scholarly_stats.py",
     "symbolic": "symbolic_derive.py",
     "chart": "scholarly_chart.py",
+    "figure": "scholarly_figure.py",
+    "screening": "scholarly_screening.py",
     "workspace": "research_workspace.py",
     "manuscript": "scholarly_manuscript.py",
+    "verify": "scholarly_verify.py",
 }
+
+
+def _package_status(distribution: str, import_name: str) -> str:
+    available = importlib.util.find_spec(import_name) is not None
+    if not available:
+        return "unavailable"
+    try:
+        version = importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        version = "installed"
+    return version
 
 
 def _usage() -> str:
@@ -64,6 +79,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Package: {Path(__file__).resolve().parent}")
         print(f"Python: {sys.version.split()[0]}")
         print(f"Entry point available: scholarime")
+        for label, distribution, import_name in (
+            ("Pillow", "Pillow", "PIL"),
+            ("NumPy", "numpy", "numpy"),
+            ("Matplotlib", "matplotlib", "matplotlib"),
+            ("PyMuPDF", "PyMuPDF", "pymupdf"),
+            ("SciPy", "scipy", "scipy"),
+            ("Statsmodels", "statsmodels", "statsmodels"),
+            ("pywebview", "pywebview", "webview"),
+        ):
+            print(f"{label}: {_package_status(distribution, import_name)}")
         return 0
     filename = COMMANDS.get(command)
     if filename is None:

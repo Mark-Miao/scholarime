@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scholarime"
-version = "0.2.0"
+version = "0.3.0"
 description = "An auditable academic research agent toolkit."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -12,6 +12,11 @@ requires-python = ">=3.10"
 
 [project.optional-dependencies]
 charts = ["Pillow>=10.0,<14"]
+figures = [
+  "numpy>=1.26,<3",
+  "matplotlib>=3.8,<4",
+]
+figure-pdf = ["PyMuPDF>=1.24,<2"]
 ui = ["pywebview>=5.0,<7"]
 excel = ["openpyxl>=3.1,<4"]
 symbolic = ["sympy>=1.13,<2"]
@@ -25,6 +30,9 @@ stats = ["scipy>=1.13,<2", "statsmodels>=0.14,<1"]
 writing = ["python-docx>=1.1,<2", "citeproc-py>=0.8,<1"]
 all = [
   "Pillow>=10.0,<14",
+  "numpy>=1.26,<3",
+  "matplotlib>=3.8,<4",
+  "PyMuPDF>=1.24,<2",
   "pywebview>=5.0,<7",
   "openpyxl>=3.1,<4",
   "sympy>=1.13,<2",
@@ -55,4 +63,5 @@ scholarime = [
   "formal/**/*",
   "install/**/*",
   "references/**/*",
+  "vendor/**/*",
 ]

@@ -10,7 +10,7 @@ python -m scholarime --help
 ```
 
 Optional dependency groups are defined in `pyproject.toml`: `charts`, `ui`, `excel`, `symbolic`,
-`workspace`, `stats`, `writing`, and `all`.
+`figures`, `figure-pdf`, `workspace`, `stats`, `writing`, and `all`.
 
 ## Research Workspace
 
@@ -40,6 +40,13 @@ scholarime workspace matrix project --output evidence.json
 Treat `supports`, `challenges`, and `context` as researcher decisions. Do not infer causal support
 from a co-occurring sentence.
 
+## Systematic Review Screening
+
+Protocol-driven screening uses `scholarime screening`. The full workflow, blinding requirements,
+QC rules, and PRISMA handoff are in [systematic-screening.md](systematic-screening.md).
+Scholarime search and review JSON files can be imported directly, and
+`TA_scholarime_sources.json` can be passed back to `workspace add-sources`.
+
 ## Statistical Analysis
 
 Run statistics on an existing CSV/Excel/JSON dataset. Data cleaning remains in `scholarly_data.py`.
@@ -51,7 +58,9 @@ Run statistics on an existing CSV/Excel/JSON dataset. Data cleaning remains in `
     {"op": "describe", "columns": ["score"]},
     {"op": "correlation", "columns": ["score", "age"], "method": "pearson"},
     {"op": "t_test", "value": "score", "group": "condition", "groups": ["control", "treatment"]},
-    {"op": "regression", "formula": "score ~ age + condition"}
+    {"op": "regression", "formula": "score ~ age + C(condition)", "cov_type": "HC3"},
+    {"op": "diagnostics", "formula": "score ~ age + C(condition)"},
+    {"op": "multiple_comparison", "p_values": [0.01, 0.04, 0.2], "method": "holm"}
   ]
 }
 ```
@@ -61,9 +70,18 @@ scholarime stats validate analysis.json
 scholarime stats run cleaned.csv analysis.json
 ```
 
-Descriptive analysis uses the standard library. Inferential tests and regression require SciPy and
-Statsmodels. Report sample size, missing data, assumptions, effect sizes, uncertainty, and study
-design. A p-value alone is not a conclusion.
+Descriptive analysis uses the standard library. Inferential tests and modelling require SciPy and
+Statsmodels. The model schema and reporting requirements are in
+[statistical-analysis.md](statistical-analysis.md). Every report includes an automatic reporting
+audit, but the author must still supply the experimental unit, replication, missing-data handling,
+model assumptions, and multiplicity policy. A p-value alone is not a conclusion.
+
+## Publication Figures
+
+Use `scholarime chart` for general CSV bar, line, pie, and scatter charts. Use
+`scholarime figure` for validated volcano, ROC, dot, marginal, paired, heatmap, and forest
+templates plus source, PDF, SVG, and panel audits. See
+[figure-production.md](figure-production.md).
 
 ## Manuscript Assembly
 

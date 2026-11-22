@@ -14,7 +14,10 @@ Changes made for Scholarime:
   workflow to checks suitable for short final responses.
 - Merged the high-signal rules into `references/language-style.md`.
 - Added a minimal-edit and information-preservation gate for the review subagent.
-- Did not copy the upstream detector scripts or research datasets into the distributable skill.
+- Added a prompt-only direct-delivery wrapper under `references/less-ai-tone/`.
+- Included the upstream prompt, detection protocol, semantic criteria, research notes, worked
+  example, and license.
+- Did not copy the upstream detector scripts or marketing images.
 
 The upstream project does not endorse Scholarime. The adapted material must not be used for
 commercial purposes unless the user obtains the permissions required by the upstream license.

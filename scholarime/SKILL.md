@@ -1,6 +1,6 @@
 ---
 name: scholarime
-description: Support persistent research workspaces, scholarly search, data analysis, symbolic and formal math, manuscript assembly, citations, and charts with a quiet senior-scholar voice.
+description: Support persistent research workspaces, scholarly search, citation verification, systematic review screening, data analysis, symbolic and formal math, manuscript assembly, publication figures, and full-prompt de-AI-tone editing.
 ---
 
 # Scholarime
@@ -43,6 +43,20 @@ should not load the full reference when delegation is available.
 If the environment cannot spawn subagents, read the rubric and run the same draft-and-revise loop
 inline, then clean up the file. State the fallback only when it materially affects the result.
 
+## De-AI Tone Tool
+
+When the user asks to 去 AI 味、降低 AI 率、降低 AI 味、去 AI 腔, or otherwise rewrite supplied
+text to sound less AI-generated, load
+[references/less-ai-tone/TOOL.md](references/less-ai-tone/TOOL.md) completely and follow it.
+
+That tool contains the complete original rule set and semantic criteria in prompt form. Do not call
+the upstream Python scripts. Return only the processed text, not a detection report, unless the user
+explicitly asks for a report.
+
+The delivered text is user content. The mandatory response-style gate applies only to any
+surrounding assistant commentary, not to the processed document itself; do not let the outer style
+reviewer shorten or restructure the user's text.
+
 ## Academic Search
 
 Use [scripts/academic_search.py](scripts/academic_search.py) when the user supplies a research
@@ -56,8 +70,16 @@ python scholarime/scripts/academic_search.py search "research topic" \
 ```
 
 The tool stores source records in a temporary SQLite database and creates ranked
-`candidates.json`. Read the candidates, assess them one by one, remove weak matches, and give the
-user ten or fewer references in descending relevance.
+`candidates.json`. Verify those candidates before presenting them:
+
+```bash
+scholarime verify /tmp/scholarime-search-.../candidates.json
+```
+
+Read [references/citation-verification.md](references/citation-verification.md) before
+interpreting the results. The verification file and HTML report are written beside the candidates.
+Assess the candidates one by one, remove weak matches, and give the user ten or fewer references
+in descending relevance with each verification status retained.
 CNKI, Wanfang, and VIP are import-only sources; do not call them automatically searched.
 
 Semantic Scholar requires a configured API key. If none exists, say explicitly that Semantic
@@ -78,6 +100,44 @@ The UI supports ordering, deletion, manual sources, and RIS, BibTeX, EndNote, or
 After confirmation, read its `final_references.json` and preserve the user's final ordering. It
 supports GB/T 7714-2025 and APA 7. Clean up the exact search run after delivering the result, and
 do not claim strict CSL validation when the assets are missing.
+
+Citation verification is evidence, not a fake/real verdict. Do not discard a relevant record
+solely because it is `unverified` or `unable_to_check`. A `conflict` result must be shown
+explicitly and must not be silently cited as confirmed.
+
+The verification output also compares retrieved title, authors, year, container, volume, issue, and
+pages with each candidate. Keep `field_verification_status` in the reviewed list and flag any
+`conflict`; missing metadata remains `not_checked`. The detailed status contract is in
+[references/citation-verification.md](references/citation-verification.md).
+
+## Systematic Review Screening
+
+When the user supplies an eligibility protocol and asks to screen records, use
+[scripts/scholarly_screening.py](scripts/scholarly_screening.py). Read
+[references/systematic-screening.md](references/systematic-screening.md) before starting.
+
+```bash
+scholarime screening init review-screening
+scholarime screening prepare --work review-screening \
+  --inputs candidates.json --config review-screening/screening_config.json
+scholarime screening workflow ta --work review-screening \
+  --protocol review-screening/screening_protocol.md \
+  --config review-screening/screening_config.json --jobs pilot \
+  --emit-prompts review-screening/prompts
+```
+
+Run Reviewer A, Reviewer B, adjudication, and QC in separate contexts. Do not synthesize missing
+reviewer decisions. Merge only actual generated decision files:
+
+```bash
+scholarime screening merge --work review-screening \
+  --from review-screening/decisions-a.json review-screening/decisions-b.json --stage ta
+scholarime screening outputs --work review-screening --out review-output --stage ta
+```
+
+The output includes PRISMA counts, RIS groups, a methods draft, and a workspace-compatible
+`TA_scholarime_sources.json`. AI decisions are decision support; the review team verifies them.
+PRISMA numbers are provisional while records or required QC rechecks remain pending.
 
 ## Research Workspace and Evidence
 
@@ -107,8 +167,14 @@ python -m scholarime stats run cleaned.csv analysis.json
 ```
 
 Descriptive analysis uses the standard library. Inferential tests and regression require SciPy and
-Statsmodels. Report sample size, missingness, assumptions, effect sizes, uncertainty, and study
-design; do not turn a p-value into a causal or practical conclusion.
+Statsmodels. The tool supports OLS, WLS, robust covariance, logit, probit, GLM, mixed models,
+diagnostics, multiple-comparison correction, stationarity tests, ARIMA, and power analysis.
+
+Read [references/statistical-analysis.md](references/statistical-analysis.md) before writing a
+model recipe. Every run includes a reporting audit. Report the unit used as `n`, replication,
+missingness, model specification, assumptions, effect sizes, uncertainty, multiplicity, and study
+design. Use `AUTHOR_INPUT_NEEDED` when the design is absent instead of inventing it; do not turn a
+p-value into a causal or practical conclusion.
 
 ## Manuscript Assembly
 
@@ -173,7 +239,7 @@ user consent. On Arch Linux, Coq 9 is installed through the official `rocq` pack
 accepts both `coqc` and `rocq compile`, and proofs importing the standard library also need
 `rocq-stdlib`.
 
-## Chart Generation
+## Chart and Figure Production
 
 For requests to turn a CSV table into a PNG figure, use
 [scripts/scholarly_chart.py](scripts/scholarly_chart.py). Do not redraw the chart with ad hoc code
@@ -193,6 +259,22 @@ If Pillow is missing, follow [install/INSTALL.md](install/INSTALL.md). Do not ch
 source until the user has chosen and approved a mirror. After a successful render, report the PNG
 path, actual font, and font size returned by the tool.
 
+For volcano, ROC, dot, marginal, paired, heatmap, or forest manuscript templates, use
+[scripts/scholarly_figure.py](scripts/scholarly_figure.py):
+
+```bash
+scholarime figure list-templates
+scholarime figure template volcano --input results.csv --output figures/volcano
+scholarime figure validate-source plotting.py --strict
+scholarime figure collision figure.pdf --json-out collision.audit.json
+```
+
+The template command writes PNG, editable SVG, PDF, 600 dpi TIFF, and a QA JSON record. PDF
+collision auditing needs the optional `figure-pdf` dependency; source, SVG, panel, and PDF text
+audits otherwise use lightweight dependencies. Read
+[references/figure-production.md](references/figure-production.md) before choosing a template or
+declaring a figure ready. A QA pass does not establish scientific validity.
+
 ## Academic Responsibility
 
 The style gate changes presentation, not truth. The main agent remains responsible for source
@@ -202,5 +284,6 @@ accuracy, citation integrity, calculation, and the substance of the answer. A po
 ## License
 
 Original Scholarime code and documentation use CC BY-NC-SA 4.0. Commercial use is prohibited.
-Third-party CSL styles and adapted style material retain their separate licenses documented in
+Third-party CSL styles, nature-skills figure code, Academic Research Skills screening material,
+CiteVerify, and adapted style guidance retain their separate licenses documented in
 `THIRD_PARTY_NOTICES.md`; do not relicense them as Scholarime content.

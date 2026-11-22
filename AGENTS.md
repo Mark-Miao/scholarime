@@ -11,6 +11,7 @@ The distributable skill lives in `scholarime/`:
 - `scholarime/tests/` contains standard-library `unittest` tests.
 - `scholarime/references/` contains detailed guidance loaded only when needed.
 - `scholarime/assets/` contains citation style assets and provenance notes.
+- `scholarime/vendor/` contains audited third-party runtime code and its license.
 - `scholarime/install/` contains dependency and installation instructions.
 
 Keep generated PNG files outside the skill's source directories unless they are deliberate test
@@ -59,6 +60,20 @@ Using a separate reviewer keeps the complete rubric and iterative style edits ou
 agent's context. If subagents are unavailable, the main agent must read the style reference, run
 the same loop inline, and still remove the exact temporary file. Never fabricate a `PASS`.
 
+### De-AI tone tool
+
+When the user asks to 去 AI 味、降低 AI 率、降低 AI 味、去 AI 腔, or make supplied text sound less
+AI-generated, read `scholarime/references/less-ai-tone/TOOL.md` completely. It routes to the
+complete original prompt, detection categories, semantic criteria, and research provenance.
+
+This tool is prompt-only. Do not execute the upstream detector scripts. Process the supplied text
+with the original rules, return only the rewritten text, and preserve all meaning, facts,
+citations, structure, and requested formatting. If the user explicitly requests a detection report
+or before/after comparison, follow the original reporting workflow instead.
+
+The processed text is the user's deliverable, so the normal assistant response-style gate must not
+rewrite or shorten it. It may only review any separate assistant commentary.
+
 ## Build, Test, and Development Commands
 
 There is no package build step. Install the Python dependencies by following
@@ -68,10 +83,13 @@ There is no package build step. Install the Python dependencies by following
 python3 -m unittest discover -s scholarime/tests -v
 python3 -m scholarime --help
 python3 scholarime/scripts/academic_search.py --help
+python3 scholarime/scripts/scholarly_verify.py --help
 python3 scholarime/scripts/scholarly_data.py --help
 python3 scholarime/scripts/symbolic_derive.py --help
 python3 scholarime/scripts/reference_review.py --help
 python3 scholarime/scripts/scholarly_chart.py --help
+python3 scholarime/scripts/scholarly_figure.py --help
+python3 scholarime/scripts/scholarly_screening.py --help
 python3 scholarime/scripts/scholarly_chart.py --list-palettes
 python3 scholarime/scripts/scholarly_chart.py --list-fonts
 ```
@@ -132,6 +150,24 @@ Use `--export-csv-template example.csv` for a complete starter file. Use `--over
 the user intends to replace an existing PNG or template. The tool reports the absolute PNG path,
 the font actually used, whether fallback occurred, and the font size. Preserve those values when
 describing the result to the user.
+
+For volcano, ROC, dot, marginal, paired, heatmap, or forest manuscript figures, use
+`scholarime/scripts/scholarly_figure.py`. Read
+[scholarime/references/figure-production.md](scholarime/references/figure-production.md) before
+selecting a template:
+
+```bash
+python3 scholarime/scripts/scholarly_figure.py list-templates
+python3 scholarime/scripts/scholarly_figure.py template volcano \
+  --input results.csv --output figures/volcano
+python3 scholarime/scripts/scholarly_figure.py validate-source plotting.py --strict
+python3 scholarime/scripts/scholarly_figure.py collision figure.pdf \
+  --json-out collision.audit.json
+```
+
+Templates export PNG, SVG, PDF, 600 dpi TIFF, and a QA record. PDF collision auditing requires the
+optional `figure-pdf` dependency. Source, SVG, panel, and PDF-text audits remain available without
+it. An audit PASS checks layout mechanics, not scientific validity or statistical meaning.
 
 ## Data Preparation Tool
 
@@ -213,15 +249,34 @@ python3 scholarime/scripts/academic_search.py search "研究主题" \
 ```
 
 The tool stores raw and normalized source records in a temporary SQLite database and writes ranked
-candidates to `candidates.json`. Review those candidates one at a time using their titles,
-abstracts, source metadata, DOI, year, citation count, and relevance explanation. Remove off-topic
-records and present ten or fewer references in strong-to-weak order. Cite only metadata that was
-actually retrieved or supplied by the user.
+candidates to `candidates.json`. Verify them before presenting the list:
+
+```bash
+python3 scholarime/scripts/scholarly_verify.py \
+  /tmp/scholarime-search-.../candidates.json
+```
+
+Read [scholarime/references/citation-verification.md](scholarime/references/citation-verification.md)
+before interpreting statuses. Review candidates one at a time using their titles, abstracts,
+source metadata, DOI, year, citation count, relevance explanation, and verification evidence.
+Remove off-topic records and present ten or fewer references in strong-to-weak order, retaining
+each `verification_status`. Cite only metadata that was actually retrieved or supplied by the
+user.
 
 Set `SCHOLARIME_CONTACT_EMAIL` for the OpenAlex and Crossref polite pools. Set `NCBI_API_KEY` when
 available to raise PubMed E-utilities limits. HTTP 429/5xx and transient network failures are
 retried with backoff. A source with some successful queries and some failures is reported as
 `partial`; tell the user that coverage is incomplete rather than treating it as a total failure.
+
+The vendored CiteVerify engine checks DOI, book, and report metadata. Its result is evidence, not
+a verdict that a work is genuine. Do not remove a relevant candidate solely because it is
+`unverified` or `unable_to_check`. A `conflict` result must be shown explicitly and must not be
+silently cited as confirmed. OpenAlex and Semantic Scholar keys are optional; pass them through
+environment variables or protected key files, never command-line values, reports, logs, or chat.
+
+The tool also compares retrieved title, authors, year, container, volume, issue, and pages with
+each search candidate. Keep `field_verification_status` in the presented list. A field-level
+`conflict` requires explicit warning; absent metadata remains `not_checked`.
 
 After presenting the list, ask whether the user wants citation formatting. If they decline, stop
 and clean up the temporary search run:
@@ -241,12 +296,49 @@ The UI starts with the ranked candidates already loaded. It supports drag-and-dr
 deletion, manual technical manuals or web sources, and imports from RIS, BibTeX, EndNote, and
 RefWorks. On confirmation it writes `final_references.json` beside the candidate file and closes
 the native window when `pywebview` is available. Read that JSON and use its final order and
-citation list. Do not reorder it without the user's instruction. After the result has been
+citation list. Use `citation-verification.json` to retain verification status for the selected
+records. Do not reorder the list without the user's instruction. After the result has been
 delivered and no longer needs the run directory, remove the exact temporary search directory.
 
 The UI supports GB/T 7714-2025 sequential citations and APA 7. The required CSL assets are included
 under `scholarime/assets/citation-styles/`; follow their third-party license when redistributing
 them.
+
+## Systematic Review Screening
+
+Use `scholarime screening` only for protocol-driven review screening, conflict resolution,
+exclusion audits, or PRISMA reporting. Read
+[scholarime/references/systematic-screening.md](scholarime/references/systematic-screening.md)
+before starting.
+
+```bash
+python3 scholarime/scripts/scholarly_screening.py init review-screening
+python3 scholarime/scripts/scholarly_screening.py prepare \
+  --work review-screening --inputs candidates.json \
+  --config review-screening/screening_config.json
+python3 scholarime/scripts/scholarly_screening.py workflow ta \
+  --work review-screening --protocol review-screening/screening_protocol.md \
+  --config review-screening/screening_config.json --jobs pilot \
+  --emit-prompts review-screening/prompts
+```
+
+Reviewer A and Reviewer B must run in separate contexts. Adjudication and QC are separate roles as
+well. Merge only actual reviewer outputs:
+
+```bash
+python3 scholarime/scripts/scholarly_screening.py merge \
+  --work review-screening \
+  --from review-screening/decisions-a.json \
+  review-screening/decisions-b.json --stage ta
+python3 scholarime/scripts/scholarly_screening.py outputs \
+  --work review-screening --out review-output --stage ta
+```
+
+Outputs include the screening log, RIS groups, PRISMA counts, a methods draft, and
+`TA_scholarime_sources.json` for the workspace. Supplying `--workspace project` also imports the
+selected sources and records screening reports as workspace artifacts. AI decisions remain
+decision support. Never invent missing reviewer records or report provisional PRISMA numbers as
+final.
 
 ## Research Workspace and PDF Evidence
 
@@ -273,7 +365,8 @@ evidence. Do not describe a segment as proving a claim automatically; relations 
 
 ## Statistical Analysis
 
-Use `scholarime stats` on cleaned tabular data. Read the workspace/statistics/manuscript guide
+Use `scholarime stats` on cleaned tabular data. Read
+[scholarime/references/statistical-analysis.md](scholarime/references/statistical-analysis.md)
 before writing a recipe:
 
 ```bash
@@ -282,8 +375,11 @@ python3 -m scholarime stats run cleaned.csv analysis.json
 ```
 
 Descriptive statistics work with the standard library. Inferential tests and regression require
-SciPy and Statsmodels. Review missing-data handling, assumptions, effect sizes, confidence
-intervals, and study design. A p-value alone is not evidence of importance or causality.
+SciPy and Statsmodels. Supported models include OLS, WLS, robust covariance, logit, probit, GLM,
+mixed models, diagnostics, multiple-comparison correction, stationarity tests, ARIMA, and power
+analysis. Every report includes a reporting audit. Review missing-data handling, assumptions,
+effect sizes, confidence intervals, multiplicity, and study design. Use `AUTHOR_INPUT_NEEDED`
+when design information is missing. A p-value alone is not evidence of importance or causality.
 
 ## Manuscript Assembly
 
@@ -318,8 +414,10 @@ changes, cover type inference, missing values, row preservation/drop counts, uns
 overwrite protection, and audit output. For symbolic changes, cover expression sandboxing,
 forbidden proof constructs, compiler success/failure states, and timeout/unavailable-engine
 reporting. For workspace changes, cover source deduplication, claim/evidence links, and matrix
-output. For writing changes, cover citation resolution, CSL fallback, and partial-output
-protection. Run:
+output. For figure changes, cover template output, QA records, and dependency-free audit self-tests.
+For screening changes, cover Scholarime JSON conversion, stable screening preparation, selection
+exports, and workspace handoff. For writing changes, cover citation resolution, CSL fallback, and
+partial-output protection. Run:
 
 ```bash
 python3 -m unittest discover -s scholarime/tests -v

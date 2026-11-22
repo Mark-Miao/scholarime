@@ -26,6 +26,9 @@ SUPPORTED = {
     "anova",
     "chi_square",
     "regression",
+    "diagnostics",
+    "multiple_comparison",
+    "time_series",
     "power",
 }
 
@@ -145,6 +148,312 @@ def _require_statsmodels():
             "Regression requires Statsmodels. Install the stats dependencies."
         ) from exc
     return sm, smf
+
+
+def _formula_columns(table: Any, formula: str) -> list[str]:
+    if not formula or "~" not in formula:
+        raise StatsError("A model formula such as y ~ x1 + x2 is required.")
+    required = [
+        token
+        for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula)
+        if token not in {"C", "Q", "np", "log", "exp", "I"}
+    ]
+    missing = [column for column in required if column not in table.headers]
+    if missing:
+        raise StatsError(f"Unknown model column(s): {', '.join(missing)}")
+    return required
+
+
+def _model_data(table: Any) -> Any:
+    try:
+        import pandas as pd
+    except ImportError:
+        return table.rows
+    data = pd.DataFrame(table.rows)
+    for column in table.headers:
+        converted = pd.to_numeric(data[column], errors="coerce")
+        nonempty = data[column].notna() & data[column].astype(str).str.strip().ne("")
+        if nonempty.any() and converted[nonempty].notna().all():
+            data[column] = converted
+    return data
+
+
+def _field_value(container: Any, name: str, index: int) -> Any:
+    try:
+        if hasattr(container, "loc"):
+            return container.loc[name]
+        return container[index]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _confidence_interval(container: Any, name: str, index: int) -> tuple[Any, Any]:
+    try:
+        if hasattr(container, "loc"):
+            row = container.loc[name]
+            return row.iloc[0], row.iloc[1]
+        row = container[index]
+        return row[0], row[1]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return None, None
+
+
+def _model_metrics(model: Any) -> dict[str, Any]:
+    metrics: dict[str, Any] = {}
+    aliases = {
+        "rsquared": "r_squared",
+        "rsquared_adj": "adjusted_r_squared",
+        "prsquared": "pseudo_rsquared",
+        "pseudo_rsquared": "pseudo_rsquared",
+        "fvalue": "f_statistic",
+        "f_pvalue": "f_p_value",
+        "llf": "log_likelihood",
+        "aic": "aic",
+        "bic": "bic",
+    }
+    for attribute, key in aliases.items():
+        value = getattr(model, attribute, None)
+        if value is not None:
+            metrics[key] = _json_number(value)
+    return metrics
+
+
+def _model_coefficients(model: Any) -> list[dict[str, Any]]:
+    names = list(getattr(getattr(model, "model", None), "exog_names", []) or [])
+    coefficients = []
+    for index, name in enumerate(names):
+        estimate = _field_value(model.params, name, index)
+        if estimate is None:
+            continue
+        low, high = _confidence_interval(model.conf_int(), name, index)
+        coefficients.append(
+            {
+                "term": name,
+                "estimate": _json_number(estimate),
+                "std_error": _json_number(_field_value(model.bse, name, index)),
+                "statistic": _json_number(_field_value(model.tvalues, name, index)),
+                "p_value": _json_number(_field_value(model.pvalues, name, index)),
+                "ci_low": _json_number(low),
+                "ci_high": _json_number(high),
+            }
+        )
+    return coefficients
+
+
+def _ols_diagnostics(model: Any, sm: Any) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {}
+    try:
+        from statsmodels.stats.diagnostic import het_breuschpagan
+
+        statistic, p_value, f_statistic, f_p_value = het_breuschpagan(
+            model.resid,
+            model.model.exog,
+        )
+        diagnostics["breusch_pagan"] = {
+            "available": True,
+            "statistic": _json_number(statistic),
+            "p_value": _json_number(p_value),
+            "f_statistic": _json_number(f_statistic),
+            "f_p_value": _json_number(f_p_value),
+        }
+    except Exception as exc:
+        diagnostics["breusch_pagan"] = {"available": False, "reason": str(exc)}
+    try:
+        from statsmodels.stats.stattools import durbin_watson, jarque_bera
+
+        diagnostics["durbin_watson"] = _json_number(durbin_watson(model.resid))
+        jb_statistic, jb_p_value, skew, kurtosis = jarque_bera(model.resid)
+        diagnostics["jarque_bera"] = {
+            "statistic": _json_number(jb_statistic),
+            "p_value": _json_number(jb_p_value),
+            "skew": _json_number(skew),
+            "kurtosis": _json_number(kurtosis),
+        }
+    except Exception as exc:
+        diagnostics["residual_tests"] = {"available": False, "reason": str(exc)}
+    try:
+        from statsmodels.stats.outliers_influence import variance_inflation_factor
+
+        values = {}
+        for index, name in enumerate(model.model.exog_names):
+            if name == "Intercept":
+                continue
+            values[name] = _json_number(
+                variance_inflation_factor(model.model.exog, index)
+            )
+        diagnostics["vif"] = values
+    except Exception as exc:
+        diagnostics["vif"] = {"available": False, "reason": str(exc)}
+    try:
+        diagnostics["condition_number"] = _json_number(
+            sm.tools.tools.condition_number(model.model.exog)
+        )
+    except Exception as exc:
+        diagnostics["condition_number"] = {"available": False, "reason": str(exc)}
+    return diagnostics
+
+
+def _fit_regression(table: Any, analysis: Mapping[str, Any]) -> dict[str, Any]:
+    sm, smf = _require_statsmodels()
+    formula = str(analysis.get("formula", "")).strip()
+    _formula_columns(table, formula)
+    model_type = str(analysis.get("model", "ols")).casefold()
+    data = _model_data(table)
+    fit_kwargs: dict[str, Any] = {}
+
+    if model_type in {"ols", "wls"}:
+        weights = None
+        if model_type == "wls":
+            weight_column = _columns(table.headers, analysis.get("weights"))[0]
+            weights = data[weight_column] if hasattr(data, "columns") else [
+                row.get(weight_column) for row in data
+            ]
+        model = smf.wls(formula, data=data, weights=weights) if model_type == "wls" else smf.ols(
+            formula,
+            data=data,
+        )
+        cov_type = str(analysis.get("cov_type", "nonrobust")).upper()
+        if cov_type != "NONROBUST":
+            if cov_type == "CLUSTER":
+                cluster_column = _columns(table.headers, analysis.get("cluster"))[0]
+                fitted = model.fit()
+                fitted = fitted.get_robustcov_results(
+                    cov_type="cluster",
+                    groups=(
+                        data[cluster_column]
+                        if hasattr(data, "columns")
+                        else [row.get(cluster_column) for row in data]
+                    ),
+                )
+            else:
+                if cov_type == "HAC":
+                    fit_kwargs["cov_kwds"] = {
+                        "maxlags": int(analysis.get("maxlags", 1)),
+                    }
+                fitted = model.fit(cov_type=cov_type, **fit_kwargs)
+        else:
+            fitted = model.fit()
+        extra = {"diagnostics": _ols_diagnostics(fitted, sm)}
+    elif model_type in {"logit", "probit"}:
+        model = getattr(smf, model_type)(formula, data=data)
+        fitted = model.fit(disp=False)
+        extra = {}
+    elif model_type == "glm":
+        family_name = str(analysis.get("family", "gaussian")).casefold()
+        family_class = {
+            "gaussian": sm.families.Gaussian,
+            "binomial": sm.families.Binomial,
+            "poisson": sm.families.Poisson,
+            "gamma": sm.families.Gamma,
+            "inverse_gaussian": sm.families.InverseGaussian,
+        }.get(family_name)
+        if family_class is None:
+            raise StatsError(
+                "GLM family must be gaussian, binomial, poisson, gamma, or inverse_gaussian."
+            )
+        link_name = str(analysis.get("link", "")).strip().casefold()
+        links = sm.families.links
+        link_classes = {
+            name: candidate
+            for name, candidate in {
+                "identity": getattr(links, "Identity", None),
+                "log": getattr(links, "Log", None),
+                "logit": getattr(links, "Logit", None),
+                "probit": getattr(links, "Probit", None),
+                "inverse": getattr(links, "Inverse", None)
+                or getattr(links, "InversePower", None),
+                "inverse_power": getattr(links, "InversePower", None),
+                "sqrt": getattr(links, "Sqrt", None),
+                "cloglog": getattr(links, "CLogLog", None),
+            }.items()
+            if candidate is not None
+        }
+        link_class = link_classes.get(link_name)
+        if link_name and link_class is None:
+            raise StatsError(
+                "GLM link must be identity, log, logit, probit, inverse, sqrt, or cloglog."
+            )
+        family = family_class(link=link_class()) if link_class else family_class()
+        fitted = smf.glm(formula, data=data, family=family).fit()
+        extra = {"family": family_name, "link": link_name or "default"}
+    elif model_type == "mixedlm":
+        group_column = _columns(table.headers, analysis.get("groups"))[0]
+        groups = data[group_column] if hasattr(data, "columns") else [
+            row.get(group_column) for row in data
+        ]
+        model = smf.mixedlm(
+            formula,
+            data=data,
+            groups=groups,
+            re_formula=analysis.get("re_formula"),
+        )
+        fitted = model.fit(reml=bool(analysis.get("reml", True)))
+        extra = {"groups": group_column, "re_formula": analysis.get("re_formula") or "1"}
+    else:
+        raise StatsError(
+            "Regression model must be ols, wls, logit, probit, glm, or mixedlm."
+        )
+
+    result = {
+        "formula": formula,
+        "model_type": model_type,
+        "n": int(getattr(fitted, "nobs", len(data))),
+        "coefficients": _model_coefficients(fitted),
+    }
+    result.update(_model_metrics(fitted))
+    result.update(extra)
+    if model_type in {"ols", "wls"}:
+        result["cov_type"] = str(analysis.get("cov_type", "nonrobust")).upper()
+    return result
+
+
+def _reporting_audit(results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    checks: list[dict[str, str]] = []
+    for index, result in enumerate(results, 1):
+        op = result.get("op")
+        if op in {"regression", "diagnostics", "time_series"} and not result.get("n"):
+            checks.append(
+                {
+                    "analysis": str(index),
+                    "level": "FAIL",
+                    "message": "The analysed sample size could not be extracted.",
+                }
+            )
+        if op in {"anova", "t_test", "regression"} and not any(
+            key in result
+            for key in (
+                "cohens_d",
+                "eta_squared",
+                "r_squared",
+                "pseudo_rsquared",
+            )
+        ):
+            checks.append(
+                {
+                    "analysis": str(index),
+                    "level": "WARN",
+                    "message": "No effect-size or explained-variation measure was reported.",
+                }
+            )
+        if op in {"correlation", "t_test", "anova", "chi_square", "regression"}:
+            checks.append(
+                {
+                    "analysis": str(index),
+                    "level": "AUTHOR_INPUT_NEEDED",
+                    "message": "State the experimental unit, design, missing-data handling, and whether assumptions were checked.",
+                }
+            )
+    return {
+        "checks": checks,
+        "required_author_inputs": [
+            "experimental or observational unit used as n",
+            "replication and independence assumptions",
+            "missing-data handling and excluded observations",
+            "effect size, uncertainty interval, and exact test/model definition",
+            "multiplicity policy for multiple comparisons",
+            "software and model specification sufficient for reproduction",
+        ],
+    }
 
 
 def _pairwise_complete(
@@ -376,46 +685,128 @@ def run_analysis(
         return result
 
     if op == "regression":
-        _, smf = _require_statsmodels()
+        result.update(_fit_regression(table, analysis))
+        return result
+
+    if op == "diagnostics":
+        sm, smf = _require_statsmodels()
         formula = str(analysis.get("formula", "")).strip()
-        if not formula or "~" not in formula:
-            raise StatsError("regression requires a formula such as y ~ x1 + x2.")
-        required = [
-            token
-            for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula)
-            if token not in {"C", "Q", "np", "log", "exp"}
-        ]
-        missing = [column for column in required if column not in table.headers]
-        if missing:
-            raise StatsError(f"Unknown regression column(s): {', '.join(missing)}")
-        model = smf.ols(formula, data=table.rows).fit()
-        coefficients = []
-        for name in model.params.index:
-            coefficients.append(
-                {
-                    "term": name,
-                    "estimate": _json_number(model.params[name]),
-                    "std_error": _json_number(model.bse[name]),
-                    "p_value": _json_number(model.pvalues[name]),
-                    "ci_low": _json_number(model.conf_int().loc[name, 0]),
-                    "ci_high": _json_number(model.conf_int().loc[name, 1]),
-                }
-            )
+        _formula_columns(table, formula)
+        fitted = smf.ols(formula, data=_model_data(table)).fit()
         result.update(
             {
                 "formula": formula,
-                "n": int(model.nobs),
-                "r_squared": _json_number(model.rsquared),
-                "adjusted_r_squared": _json_number(model.rsquared_adj),
-                "f_statistic": _json_number(model.fvalue),
-                "f_p_value": _json_number(model.f_pvalue),
-                "residual_diagnostics": {
-                    key: _json_number(value) for key, value in model.diagn.items()
-                },
-                "coefficients": coefficients,
+                "n": int(fitted.nobs),
+                "diagnostics": _ols_diagnostics(fitted, sm),
             }
         )
         return result
+
+    if op == "multiple_comparison":
+        try:
+            from statsmodels.stats.multitest import multipletests
+        except ImportError as exc:
+            raise StatsError("Multiple-comparison correction requires Statsmodels.") from exc
+        values = analysis.get("p_values")
+        if not isinstance(values, list) or not values:
+            raise StatsError("multiple_comparison requires a non-empty p_values list.")
+        try:
+            p_values = [float(value) for value in values]
+        except (TypeError, ValueError) as exc:
+            raise StatsError("All p_values must be numeric.") from exc
+        if any(value < 0 or value > 1 for value in p_values):
+            raise StatsError("p_values must be between 0 and 1.")
+        method = str(analysis.get("method", "holm")).casefold()
+        alpha = float(analysis.get("alpha", 0.05))
+        try:
+            rejected, adjusted, _, _ = multipletests(
+                p_values,
+                alpha=alpha,
+                method=method,
+            )
+        except (ValueError, TypeError) as exc:
+            raise StatsError(f"Unsupported or invalid correction method: {method}") from exc
+        result.update(
+            {
+                "method": method,
+                "alpha": alpha,
+                "p_values": p_values,
+                "adjusted_p_values": [_json_number(value) for value in adjusted],
+                "rejected": [bool(value) for value in rejected],
+            }
+        )
+        return result
+
+    if op == "time_series":
+        try:
+            from statsmodels.tsa.arima.model import ARIMA
+            from statsmodels.tsa.stattools import adfuller
+        except ImportError as exc:
+            raise StatsError("Time-series analysis requires Statsmodels.") from exc
+        column = _columns(table.headers, analysis.get("column"))[0]
+        values = _numeric([row.get(column) for row in rows])
+        if len(values) < 3:
+            raise StatsError("time_series requires at least three numeric observations.")
+        test = str(analysis.get("test", "adf")).casefold()
+        if test == "adf":
+            adf_options = {
+                "maxlag": analysis.get("maxlag"),
+                "regression": str(analysis.get("regression", "c")),
+                "autolag": analysis.get("autolag", "AIC"),
+            }
+            try:
+                adf_result = adfuller(values, result_object=False, **adf_options)
+            except TypeError:
+                adf_result = adfuller(values, **adf_options)
+            statistic, p_value, used_lag, nobs, critical = adf_result[:5]
+            result.update(
+                {
+                    "test": "adf",
+                    "column": column,
+                    "n": len(values),
+                    "statistic": _json_number(statistic),
+                    "p_value": _json_number(p_value),
+                    "used_lag": int(used_lag),
+                    "regression": str(analysis.get("regression", "c")),
+                    "critical_values": {
+                        key: _json_number(value) for key, value in critical.items()
+                    },
+                    "nobs": int(nobs),
+                }
+            )
+            return result
+        if test == "arima":
+            order = analysis.get("order", [1, 1, 0])
+            if (
+                not isinstance(order, list)
+                or len(order) != 3
+                or not all(isinstance(value, int) and value >= 0 for value in order)
+            ):
+                raise StatsError("ARIMA order must be a list of three non-negative integers.")
+            fitted = ARIMA(values, order=tuple(order), trend=analysis.get("trend", "c")).fit()
+            steps = int(analysis.get("forecast_steps", 0))
+            forecast = fitted.forecast(steps=steps) if steps > 0 else []
+            result.update(
+                {
+                    "test": "arima",
+                    "column": column,
+                    "n": len(values),
+                    "order": order,
+                    "aic": _json_number(fitted.aic),
+                    "bic": _json_number(fitted.bic),
+                    "parameters": {
+                        str(name): _json_number(value)
+                        for name, value in (
+                            fitted.params.items()
+                            if hasattr(fitted.params, "items")
+                            else zip(fitted.param_names, fitted.params, strict=True)
+                        )
+                    },
+                    "forecast": [_json_number(value) for value in forecast],
+                }
+            )
+            return result
+        raise StatsError("time_series test must be adf or arima.")
 
     try:
         from statsmodels.stats.power import TTestIndPower
@@ -482,13 +873,43 @@ def report_markdown(report: Mapping[str, Any]) -> str:
         summary = {
             key: value
             for key, value in item.items()
-            if key in {"statistic", "p_value", "r_squared", "power", "nobs_per_group", "n"}
+            if key
+            in {
+                "statistic",
+                "p_value",
+                "r_squared",
+                "pseudo_rsquared",
+                "aic",
+                "power",
+                "nobs_per_group",
+                "n",
+            }
         }
         lines.append(
             f"| {index} | {item['op']} | {json.dumps(summary, ensure_ascii=False)} |"
         )
     lines.extend(
         [
+            "",
+            "## Statistical Reporting Audit",
+            "",
+        ]
+    )
+    audit = report.get("reporting_audit") or {}
+    checks = audit.get("checks") or []
+    if checks:
+        for check in checks:
+            lines.append(
+                f"- Analysis {check['analysis']} [{check['level']}]: {check['message']}"
+            )
+    else:
+        lines.append("- No automatic reporting warnings were generated.")
+    lines.extend(
+        [
+            "",
+            "The author must still provide the experimental or observational unit used as n,",
+            "replication, missing-data handling, uncertainty, exact model/test definitions,",
+            "and the multiplicity policy. Automatic checks cannot infer study design.",
             "",
             "Inferential results require checking assumptions, study design, and effect sizes;",
             "p-values alone do not establish practical or causal significance.",
@@ -555,6 +976,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "source_sha256": table.metadata.get("source_sha256"),
             "row_count": len(table.rows),
             "results": results,
+            "reporting_audit": _reporting_audit(results),
         }
         output = (
             args.output.expanduser().resolve()

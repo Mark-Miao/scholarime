@@ -20,7 +20,16 @@ class CliPackageTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        for command in ("workspace", "stats", "manuscript", "symbolic", "chart"):
+        for command in (
+            "workspace",
+            "stats",
+            "manuscript",
+            "symbolic",
+            "chart",
+            "figure",
+            "screening",
+            "verify",
+        ):
             self.assertIn(command, result.stdout)
         version = subprocess.run(
             [sys.executable, "-m", "scholarime", "--version"],
@@ -40,6 +49,33 @@ class CliPackageTests(unittest.TestCase):
         )
         self.assertEqual(search_help.returncode, 0, search_help.stderr)
         self.assertIn("academic_search.py", search_help.stdout)
+        verify_help = subprocess.run(
+            [sys.executable, "-m", "scholarime", "verify", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(verify_help.returncode, 0, verify_help.stderr)
+        self.assertIn("CiteVerify", verify_help.stdout)
+        figure_help = subprocess.run(
+            [sys.executable, "-m", "scholarime", "figure", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(figure_help.returncode, 0, figure_help.stderr)
+        self.assertIn("template", figure_help.stdout)
+        screening_help = subprocess.run(
+            [sys.executable, "-m", "scholarime", "screening", "--help"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(screening_help.returncode, 0, screening_help.stderr)
+        self.assertIn("PRISMA", screening_help.stdout)
 
     def test_pyproject_defines_entrypoint_and_extras(self) -> None:
         payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -47,8 +83,9 @@ class CliPackageTests(unittest.TestCase):
         self.assertEqual(payload["project"]["license"]["file"], "LICENSE")
         self.assertEqual(payload["project"]["readme"], "README.md")
         extras = payload["project"]["optional-dependencies"]
-        for name in ("workspace", "stats", "writing", "all"):
+        for name in ("workspace", "stats", "writing", "figures", "figure-pdf", "all"):
             self.assertIn(name, extras)
+        self.assertIn("vendor/**/*", payload["tool"]["setuptools"]["package-data"]["scholarime"])
 
     def test_noncommercial_license_notice_is_present(self) -> None:
         license_text = (ROOT / "LICENSE").read_text(encoding="utf-8")
